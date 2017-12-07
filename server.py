@@ -13,21 +13,22 @@ logging.basicConfig(filename="pyrad.log", level="DEBUG", format="%(asctime)s [%(
 
 class RadiusServer(server.Server):
 
-    secret = "CopyRight JingYun Cloud Platform Department BE-Developer"
+    secret = "CopyRight_JingYun_Cloud-Platform-Department-BE-Developer"
 
     def __init__(self, addresses=[], authport=1812, acctport=1813, coaport=3799, hosts=None, dict=None,
                  auth_enabled=True, acct_enabled=True, coa_enabled=False, net_segment=None):
         server.Server.__init__(self, addresses, authport, acctport, coaport, hosts, dict, auth_enabled, acct_enabled,
                                coa_enabled)
-        default_hosts = set(["127.0.0.1"])
+        default_hosts = set("127.0.0.1")
         if net_segment is not None:
             ips = IP(net_segment)
             for x in ips:
-                default_hosts.add(x)
+                default_hosts.add(x.strNormal())
         for item in default_hosts:
             self.hosts[item] = server.RemoteHost(item, self.secret, item)
 
     def HandleAuthPacket(self, pkt):
+        print("handle auth packet")
         user_name = pkt["User-Name"][0]
         auth_challenge = pkt["MS-CHAP-Challenge"][0]
         response = pkt["MS-CHAP2-Response"][0]
@@ -40,6 +41,7 @@ class RadiusServer(server.Server):
             reply["MS-CHAP-Error"] = response[:1] + chap_error % (691, "Server Error")
         else:
             r = resp.json()
+            print(r)
             message = r["message"].encode("utf-8")
             if r["status"] == 001:
                 reply["MS-CHAP2-Success"] = response[:1] + r["data"]["auth_response"].encode("utf-8")
