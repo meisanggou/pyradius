@@ -3,6 +3,7 @@
 from __future__ import print_function
 import requests
 import binascii
+from IPy import IP
 from pyrad import dictionary, packet, server
 from pyrfc.rfc2548 import generate_mppe_key
 import logging
@@ -12,8 +13,21 @@ logging.basicConfig(filename="pyrad.log", level="DEBUG", format="%(asctime)s [%(
 
 class RadiusServer(server.Server):
 
+    secret = "CopyRight JingYun Cloud Platform Department BE-Developer"
+
+    def __init__(self, addresses=[], authport=1812, acctport=1813, coaport=3799, hosts=None, dict=None,
+                 auth_enabled=True, acct_enabled=True, coa_enabled=False, net_segment=None):
+        server.Server.__init__(self, addresses, authport, acctport, coaport, hosts, dict, auth_enabled, acct_enabled,
+                               coa_enabled)
+        default_hosts = set(["127.0.0.1"])
+        if net_segment is not None:
+            ips = IP(net_segment)
+            for x in ips:
+                default_hosts.add(x)
+        for item in default_hosts:
+            self.hosts[item] = server.RemoteHost(item, self.secret, item)
+
     def HandleAuthPacket(self, pkt):
-        print("Received an authentication request")
         user_name = pkt["User-Name"][0]
         auth_challenge = pkt["MS-CHAP-Challenge"][0]
         response = pkt["MS-CHAP2-Response"][0]
@@ -21,7 +35,6 @@ class RadiusServer(server.Server):
         reply.code = packet.AccessReject
         data = dict(account=user_name, auth_challenge=binascii.b2a_hex(auth_challenge), response=binascii.b2a_hex(response))
         resp = requests.post("https://www.gene.ac/auth/chap/v2/", json=data)
-        print(resp.text)
         chap_error = "E=%s R=1 C={0} V=3 M=%s".format('0' * 32)
         if resp.status_code / 100 != 2:
             reply["MS-CHAP-Error"] = response[:1] + chap_error % (691, "Server Error")
@@ -34,8 +47,8 @@ class RadiusServer(server.Server):
                 reply["MS-MPPE-Encryption-Types"] = "\x00\x00\x00\06"  # "RC4-4or128-bit-Allow"
                 send_key = binascii.a2b_hex(r["data"]["send_key"])
                 recv_key = binascii.a2b_hex(r["data"]["recv_key"])
-                reply["MS-MPPE-Send-Key"] = generate_mppe_key("local4", pkt.authenticator, send_key)
-                reply["MS-MPPE-Recv-Key"] = generate_mppe_key("local4", pkt.authenticator, recv_key)
+                reply["MS-MPPE-Send-Key"] = generate_mppe_key(self.secret, pkt.authenticator, send_key)
+                reply["MS-MPPE-Recv-Key"] = generate_mppe_key(self.secret, pkt.authenticator, recv_key)
                 reply.code = packet.AccessAccept
             elif r["status"] == 30901:
                 #  649 ERROR_NO_DIALIN_PERMISSION
@@ -56,7 +69,6 @@ class RadiusServer(server.Server):
                 data.append("%s" % pkt[key][0])
             else:
                 data.append("")
-        print("\t".join(data))
         logging.info("\t".join(data))
         reply = self.CreateReplyPacket(pkt)
         self.SendReplyPacket(pkt.fd, reply)
@@ -85,14 +97,6 @@ class RadiusServer(server.Server):
 
 if __name__ == '__main__':
 
-    # create server and read dictionary
-    srv = RadiusServer(dict=dictionary.Dictionary("dictionary"))
-    # srv.dict.ReadDictionary("dictionary.microsoft")
-    # add clients (address, secret, name)
-    srv.hosts["127.0.0.1"] = server.RemoteHost("127.0.0.1", b"local", "localhost")
-    srv.hosts["192.168.120.15"] = server.RemoteHost("192.168.120.15", b"local10", "localhost")
-    srv.hosts["192.168.120.4"] = server.RemoteHost("192.168.120.4", b"local4", "local4")
+    srv = RadiusServer(dict=dictionary.Dictionary("dictionary"), net_segment="192.168.120.0/24")
     srv.BindToAddress("")
-
-    # start server
     srv.Run()
