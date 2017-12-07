@@ -26,8 +26,6 @@ class RadiusServer(server.Server):
             for x in ips:
                 default_hosts.add(x.strNormal())
         for item in default_hosts:
-            if item.startswith("192") is False:
-                print(item)
             self.hosts[item] = server.RemoteHost(item, self.secret, item)
 
     def HandleAuthPacket(self, pkt):
@@ -101,7 +99,6 @@ class RadiusServer(server.Server):
         self.SendReplyPacket(pkt.fd, reply)
 
 if __name__ == '__main__':
-    RadiusServer.secret = "local4"
     srv = RadiusServer(dict=dictionary.Dictionary("dictionary"), net_segment="192.168.120.0/24")
     srv.BindToAddress("")
     srv.Run()
