@@ -13,18 +13,21 @@ logging.basicConfig(filename="pyrad.log", level="DEBUG", format="%(asctime)s [%(
 
 class RadiusServer(server.Server):
 
-    secret = "CopyRight_JingYun_Cloud-Platform-Department-BE-Developer"
+    secret = "CR_JingYun_CPD-BE-Developer"
 
     def __init__(self, addresses=[], authport=1812, acctport=1813, coaport=3799, hosts=None, dict=None,
                  auth_enabled=True, acct_enabled=True, coa_enabled=False, net_segment=None):
         server.Server.__init__(self, addresses, authport, acctport, coaport, hosts, dict, auth_enabled, acct_enabled,
                                coa_enabled)
-        default_hosts = set("127.0.0.1")
+        default_hosts = set()
+        default_hosts.add("127.0.0.1")
         if net_segment is not None:
             ips = IP(net_segment)
             for x in ips:
                 default_hosts.add(x.strNormal())
         for item in default_hosts:
+            if item.startswith("192") is False:
+                print(item)
             self.hosts[item] = server.RemoteHost(item, self.secret, item)
 
     def HandleAuthPacket(self, pkt):
@@ -98,7 +101,7 @@ class RadiusServer(server.Server):
         self.SendReplyPacket(pkt.fd, reply)
 
 if __name__ == '__main__':
-
+    RadiusServer.secret = "local4"
     srv = RadiusServer(dict=dictionary.Dictionary("dictionary"), net_segment="192.168.120.0/24")
     srv.BindToAddress("")
     srv.Run()
