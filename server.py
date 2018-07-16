@@ -13,7 +13,7 @@ logging.basicConfig(filename="pyrad.log", level="DEBUG", format="%(asctime)s [%(
 
 class RadiusServer(server.Server):
 
-    secret = "CR_JingYun_CPD-BE-Developer"
+    secret = b"testing123"
 
     def __init__(self, addresses=[], authport=1812, acctport=1813, coaport=3799, hosts=None, dict=None,
                  auth_enabled=True, acct_enabled=True, coa_enabled=False, net_segment=None):
@@ -28,8 +28,18 @@ class RadiusServer(server.Server):
         for item in default_hosts:
             self.hosts[item] = server.RemoteHost(item, self.secret, item)
 
-    def HandleAuthPacket(self, pkt):
-        print("handle auth packet")
+    @staticmethod
+    def print_pkt(pkt):
+        print("-------------------------Start Print-------------------------")
+        for key in pkt.keys():
+            v = pkt[key][0]
+            print(v)
+            if isinstance(v, str):
+                v = binascii.b2a_hex(v)
+            s = "%s = %s" % (key, v)
+            print(s)
+
+    def chap_v2_auth(self, pkt):
         user_name = pkt["User-Name"][0]
         auth_challenge = pkt["MS-CHAP-Challenge"][0]
         response = pkt["MS-CHAP2-Response"][0]
@@ -42,7 +52,6 @@ class RadiusServer(server.Server):
             reply["MS-CHAP-Error"] = response[:1] + chap_error % (691, "Server Error")
         else:
             r = resp.json()
-            print(r)
             message = r["message"].encode("utf-8")
             if r["status"] == 001:
                 reply["MS-CHAP2-Success"] = response[:1] + r["data"]["auth_response"].encode("utf-8")
@@ -60,10 +69,60 @@ class RadiusServer(server.Server):
                 pass
         self.SendReplyPacket(pkt.fd, reply)
 
+    def eap_auth(self, pkt):
+        # self.print_pkt(pkt)
+        print(binascii.b2a_hex(pkt["EAP-Message"][0]))
+        print(binascii.b2a_hex(pkt["Message-Authenticator"][0]))
+        print(binascii.b2a_hex(pkt.authenticator))
+
+        from pyrad.client import Client
+        import six
+        client = Client("172.16.110.4", secret=self.secret, dict=dictionary.Dictionary("dictionary"))
+        kwargs = dict()
+
+        new_pkt = client.CreateAuthPacket(code=packet.AccessRequest)
+        all_keys = ["User-Name", "NAS-Identifier", "NAS-IP-Address", "NAS-Port", "Framed-MTU", "NAS-Port-Type", "Called-Station-Id", "Calling-Station-Id"]
+        all_keys.append("EAP-Message")
+        all_keys.append("Message-Authenticator")
+        for key in pkt.keys():
+            if key in all_keys:
+                new_pkt[key] = pkt[key][0]
+            else:
+                print(key)
+        new_pkt.authenticator = pkt.authenticator
+        print(new_pkt.authenticator)
+        reply = client.SendPacket(new_pkt)
+        return self.SendReplyPacket(pkt.fd, reply)
+        reply = self.CreateReplyPacket(pkt)
+        reply.code = packet.AccessAccept
+        return self.SendReplyPacket(pkt.fd, reply)
+
+    def pap_auth(self, pkt):
+        en_password = pkt["User-Password"][0]
+        password = pkt.PwDecrypt(en_password)
+
+        reply = self.CreateReplyPacket(pkt)
+        reply.code = packet.AccessReject
+        self.SendReplyPacket(pkt.fd, reply)
+
+    def HandleAuthPacket(self, pkt):
+        print("handle auth packet")
+        if "MS-CHAP-Challenge" in pkt:
+            return self.chap_v2_auth(pkt)
+        if "EAP-Message" in pkt:
+            return self.eap_auth(pkt)
+        elif "User-Password" in pkt:
+            return self.pap_auth(pkt)
+
+        self.print_pkt(pkt)
+        reply = self.CreateReplyPacket(pkt)
+        reply.code = packet.AccessReject
+        self.SendReplyPacket(pkt.fd, reply)
+
     def HandleAcctPacket(self, pkt):
         keys = ["NAS-IP-Address", "NAS-Port", "Service-Type", "Framed-Protocol", "User-Name", "Acct-Status-Type"]
         keys_ext = ["Acct-Session-Id", "Framed-IP-Address", "Calling-Station-Id", "Acct-Authentic"]
-        keys_ext2 = ["Acct-Input-Packets", "Acct-Output-Packets", "Acct-Input-Octets","Acct-Output-Octets"]
+        keys_ext2 = ["Acct-Input-Packets", "Acct-Output-Packets", "Acct-Input-Octets", "Acct-Output-Octets"]
         keys.extend(keys_ext)
         keys.extend(keys_ext2)
         data = []
@@ -99,6 +158,6 @@ class RadiusServer(server.Server):
         self.SendReplyPacket(pkt.fd, reply)
 
 if __name__ == '__main__':
-    srv = RadiusServer(dict=dictionary.Dictionary("dictionary"), net_segment="192.168.120.0/24")
-    srv.BindToAddress("")
+    srv = RadiusServer(dict=dictionary.Dictionary("dictionary"), net_segment="172.16.110.0/24")
+    srv.BindToAddress("0.0.0.0")
     srv.Run()
