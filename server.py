@@ -1,6 +1,7 @@
 #!/usr/bin/python
 
 from __future__ import print_function
+import os
 import requests
 import binascii
 from IPy import IP
@@ -9,6 +10,8 @@ from pyrfc.rfc2548 import generate_mppe_key
 import logging
 
 logging.basicConfig(filename="pyrad.log", level="DEBUG", format="%(asctime)s [%(levelname)-8s] %(message)s")
+
+auth_endpoint = os.environ.get("RADIUS_EXTERNAL_AUTH_ENDPOINT", "http://127.0.0.1:6011")
 
 
 class RadiusServer(server.Server):
@@ -33,7 +36,6 @@ class RadiusServer(server.Server):
         print("-------------------------Start Print-------------------------")
         for key in pkt.keys():
             v = pkt[key][0]
-            print(v)
             if isinstance(v, str):
                 v = binascii.b2a_hex(v)
             s = "%s = %s" % (key, v)
@@ -98,11 +100,19 @@ class RadiusServer(server.Server):
         return self.SendReplyPacket(pkt.fd, reply)
 
     def pap_auth(self, pkt):
+        user_name = pkt["User-Name"][0]
         en_password = pkt["User-Password"][0]
         password = pkt.PwDecrypt(en_password)
-
         reply = self.CreateReplyPacket(pkt)
         reply.code = packet.AccessReject
+        data = dict(account=user_name, password=password)
+        resp = requests.post(auth_endpoint + "/auth/confirm/", json=data)
+        if resp.status_code / 100 == 2:
+            r = resp.json()
+            if r["status"] == 001:
+                reply.code = packet.AccessAccept
+            else:
+                print(r)
         self.SendReplyPacket(pkt.fd, reply)
 
     def HandleAuthPacket(self, pkt):
@@ -136,7 +146,6 @@ class RadiusServer(server.Server):
         self.SendReplyPacket(pkt.fd, reply)
 
     def HandleCoaPacket(self, pkt):
-
         print("Received an coa request")
         print("Attributes: ")
         for attr in pkt.keys():
