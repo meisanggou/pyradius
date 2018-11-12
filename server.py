@@ -4,6 +4,7 @@
 
 from __future__ import print_function
 import os
+import sys
 import re
 import time
 import requests
@@ -16,19 +17,6 @@ import logging
 logging.basicConfig(filename="pyrad.log", level="DEBUG", format="%(asctime)s [%(levelname)-8s] %(message)s")
 
 auth_endpoint = os.environ.get("RADIUS_EXTERNAL_AUTH_ENDPOINT", "http://127.0.0.1:6011")
-ip_static_config = "ip_static.config"
-rs_user_ip = dict()
-if os.path.exists(ip_static_config) is True:
-    with open(ip_static_config, "r") as r:
-        c = r.read()
-        lines = c.split("\n")
-        real_line = filter(lambda x: len(x.strip()) > 0 and x.startswith("#") is False, lines)
-        for line in real_line:
-            records = re.split("\s", line)
-            real_records = filter(lambda x: len(x) > 0, records)
-            if len(real_records) < 2:
-                continue
-            rs_user_ip[real_records[0]] = set(real_records[1:])
 
 
 class RadiusServer(server.Server):
@@ -243,7 +231,22 @@ class RadiusServer(server.Server):
         self.SendReplyPacket(pkt.fd, reply)
 
 if __name__ == '__main__':
+    ip_static_config = "ip_static.config"
+    if len(sys.argv) > 1:
+        ip_static_config = sys.argv[1]
+    relationship_user_ip = dict()
+    if os.path.exists(ip_static_config) is True:
+        with open(ip_static_config, "r") as r:
+            c = r.read()
+            lines = c.split("\n")
+            real_line = filter(lambda x: len(x.strip()) > 0 and x.startswith("#") is False, lines)
+            for line in real_line:
+                records = re.split("\s", line)
+                real_records = filter(lambda x: len(x) > 0, records)
+                if len(real_records) < 2:
+                    continue
+                relationship_user_ip[real_records[0]] = set(real_records[1:])
     srv = RadiusServer(radius_dict=dictionary.Dictionary("dictionary"), net_segment="172.16.110.0/24",
-                       rs_user_ip=rs_user_ip)
+                       rs_user_ip=relationship_user_ip)
     srv.BindToAddress("0.0.0.0")
     srv.Run()
