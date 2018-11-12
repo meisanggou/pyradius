@@ -1,7 +1,11 @@
 #!/usr/bin/python
+# coding: utf-8
+
 
 from __future__ import print_function
 import os
+import re
+import time
 import requests
 import binascii
 from IPy import IP
@@ -12,16 +16,29 @@ import logging
 logging.basicConfig(filename="pyrad.log", level="DEBUG", format="%(asctime)s [%(levelname)-8s] %(message)s")
 
 auth_endpoint = os.environ.get("RADIUS_EXTERNAL_AUTH_ENDPOINT", "http://127.0.0.1:6011")
+ip_static_config = "ip_static.config"
+rs_user_ip = dict()
+if os.path.exists(ip_static_config) is True:
+    with open(ip_static_config, "r") as r:
+        c = r.read()
+        lines = c.split("\n")
+        real_line = filter(lambda x: len(x.strip()) > 0 and x.startswith("#") is False, lines)
+        for line in real_line:
+            records = re.split("\s", line)
+            real_records = filter(lambda x: len(x) > 0, records)
+            if len(real_records) < 2:
+                continue
+            rs_user_ip[real_records[0]] = set(real_records[1:])
 
 
 class RadiusServer(server.Server):
 
-    secret = b"testing123"
+    secret = b"localkey"
 
-    def __init__(self, addresses=[], authport=1812, acctport=1813, coaport=3799, hosts=None, dict=None,
-                 auth_enabled=True, acct_enabled=True, coa_enabled=False, net_segment=None):
-        server.Server.__init__(self, addresses, authport, acctport, coaport, hosts, dict, auth_enabled, acct_enabled,
-                               coa_enabled)
+    def __init__(self, addresses=[], authport=1812, acctport=1813, coaport=3799, hosts=None, radius_dict=None,
+                 auth_enabled=True, acct_enabled=True, coa_enabled=False, net_segment=None, rs_user_ip=dict()):
+        server.Server.__init__(self, addresses, authport, acctport, coaport, hosts, radius_dict, auth_enabled,
+                               acct_enabled, coa_enabled)
         default_hosts = set()
         default_hosts.add("127.0.0.1")
         if net_segment is not None:
@@ -30,6 +47,51 @@ class RadiusServer(server.Server):
                 default_hosts.add(x.strNormal())
         for item in default_hosts:
             self.hosts[item] = server.RemoteHost(item, self.secret, item)
+        self.rs_user_ip = rs_user_ip
+        self.clock_stage = dict()
+        self.clock_interval = 60
+
+    def get_ip(self, user_name):
+        if user_name not in self.rs_user_ip:
+            return None
+        # 检查没被使用的IP
+        timeout_ip = None
+        min_start_time = time.time()
+        longer_alive_ip = None
+        for ip_item in self.rs_user_ip[user_name]:
+            key = "%s#%s" % (user_name, ip_item)
+            if key not in self.clock_stage:
+                # 检查没被使用的IP
+                return ip_item
+            elif timeout_ip is None:
+                state_info = self.clock_stage[key]
+                if state_info["clock_time"] - time.time() > self.clock_interval * 3:
+                    # 检查超时未打卡的IP
+                    timeout_ip = ip_item
+                elif state_info["start_time"] < min_start_time:
+                    # 检查登录时间最长的IP
+                    min_start_time = state_info["start_time"]
+                    longer_alive_ip = ip_item
+        if timeout_ip is not None:
+            return timeout_ip
+        return longer_alive_ip
+
+    def save_clock(self, user_name, ip_address, session_id="", status="start"):
+        key = "%s#%s" % (user_name, ip_address)
+        low_status = status.lower()
+
+        if key in self.clock_stage:
+            if low_status == "start":
+                pass
+            elif low_status == "stop":
+                del self.clock_stage[key]
+                return True
+            elif self.clock_stage[key]["session_id"] == session_id:
+                self.clock_stage[key]["clock_time"] = time.time()
+        # status=start
+        # status=alive but session_id not match
+        self.clock_stage[key] = dict(clock_time=time.time(), start_time=time.time(), session_id=session_id)
+        return True
 
     @staticmethod
     def print_pkt(pkt):
@@ -47,7 +109,8 @@ class RadiusServer(server.Server):
         response = pkt["MS-CHAP2-Response"][0]
         reply = self.CreateReplyPacket(pkt)
         reply.code = packet.AccessReject
-        data = dict(account=user_name, auth_challenge=binascii.b2a_hex(auth_challenge), response=binascii.b2a_hex(response))
+        data = dict(account=user_name, auth_challenge=binascii.b2a_hex(auth_challenge),
+                    response=binascii.b2a_hex(response))
         resp = requests.post("https://www.gene.ac/auth/chap/v2/", json=data)
         chap_error = "E=%s R=1 C={0} V=3 M=%s".format('0' * 32)
         if resp.status_code / 100 != 2:
@@ -63,6 +126,11 @@ class RadiusServer(server.Server):
                 recv_key = binascii.a2b_hex(r["data"]["recv_key"])
                 reply["MS-MPPE-Send-Key"] = generate_mppe_key(self.secret, pkt.authenticator, send_key)
                 reply["MS-MPPE-Recv-Key"] = generate_mppe_key(self.secret, pkt.authenticator, recv_key)
+                ip_address = self.get_ip(user_name)
+                if ip_address is not None:
+                    reply["Framed-IP-Address"] = ip_address
+                    reply["Acct-Interim-Interval"] = self.clock_interval
+                    self.save_clock(user_name, ip_address)
                 reply.code = packet.AccessAccept
             elif r["status"] == 30901:
                 #  649 ERROR_NO_DIALIN_PERMISSION
@@ -130,6 +198,7 @@ class RadiusServer(server.Server):
         self.SendReplyPacket(pkt.fd, reply)
 
     def HandleAcctPacket(self, pkt):
+        print("accounting")
         keys = ["NAS-IP-Address", "NAS-Port", "Service-Type", "Framed-Protocol", "User-Name", "Acct-Status-Type"]
         keys_ext = ["Acct-Session-Id", "Framed-IP-Address", "Calling-Station-Id", "Acct-Authentic"]
         keys_ext2 = ["Acct-Input-Packets", "Acct-Output-Packets", "Acct-Input-Octets", "Acct-Output-Octets"]
@@ -141,6 +210,13 @@ class RadiusServer(server.Server):
                 data.append("%s" % pkt[key][0])
             else:
                 data.append("")
+        if set(["User-Name", "Acct-Status-Type", "Framed-IP-Address", "Acct-Session-Id"]).issubset(pkt.keys()):
+            user_name = pkt["User-Name"][0]
+            status_type = pkt["Acct-Status-Type"][0]
+            ip_address = pkt["Framed-IP-Address"][0]
+            session_id = pkt["Acct-Session-Id"][0]
+            self.save_clock(user_name, ip_address, session_id, status_type)
+            print(self.clock_stage)
         logging.info("\t".join(data))
         reply = self.CreateReplyPacket(pkt)
         self.SendReplyPacket(pkt.fd, reply)
@@ -167,6 +243,7 @@ class RadiusServer(server.Server):
         self.SendReplyPacket(pkt.fd, reply)
 
 if __name__ == '__main__':
-    srv = RadiusServer(dict=dictionary.Dictionary("dictionary"), net_segment="172.16.110.0/24")
+    srv = RadiusServer(radius_dict=dictionary.Dictionary("dictionary"), net_segment="172.16.110.0/24",
+                       rs_user_ip=rs_user_ip)
     srv.BindToAddress("0.0.0.0")
     srv.Run()
