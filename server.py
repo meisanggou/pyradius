@@ -6,6 +6,7 @@ from __future__ import print_function
 import os
 import sys
 import re
+import signal
 import time
 import requests
 import binascii
@@ -24,7 +25,7 @@ class RadiusServer(server.Server):
     secret = b"localkey"
 
     def __init__(self, addresses=[], authport=1812, acctport=1813, coaport=3799, hosts=None, radius_dict=None,
-                 auth_enabled=True, acct_enabled=True, coa_enabled=False, net_segment=None, rs_user_ip=dict()):
+                 auth_enabled=True, acct_enabled=True, coa_enabled=False, net_segment=None, ip_static_file=None):
         server.Server.__init__(self, addresses, authport, acctport, coaport, hosts, radius_dict, auth_enabled,
                                acct_enabled, coa_enabled)
         default_hosts = set()
@@ -35,9 +36,29 @@ class RadiusServer(server.Server):
                 default_hosts.add(x.strNormal())
         for item in default_hosts:
             self.hosts[item] = server.RemoteHost(item, self.secret, item)
-        self.rs_user_ip = rs_user_ip
+        self.ip_static_file = ip_static_file
         self.clock_stage = dict()
-        self.clock_interval = 60
+        self.rs_user_ip = dict()
+        self.clock_interval = 600
+
+    def load_ip_static_file(self):
+        if self.ip_static_file is None:
+            config_file = "ip_static.config"
+        else:
+            config_file = self.ip_static_file
+        relationship_user_ip = dict()
+        if os.path.exists(config_file) is True:
+            with open(config_file, "r") as r:
+                c = r.read()
+                lines = c.split("\n")
+                real_line = filter(lambda x: len(x.strip()) > 0 and x.startswith("#") is False, lines)
+                for line in real_line:
+                    records = re.split("\s", line)
+                    real_records = filter(lambda x: len(x) > 0, records)
+                    if len(real_records) < 2:
+                        continue
+                    relationship_user_ip[real_records[0]] = set(real_records[1:])
+        self.rs_user_ip = relationship_user_ip
 
     def get_ip(self, user_name):
         if user_name not in self.rs_user_ip:
@@ -230,23 +251,20 @@ class RadiusServer(server.Server):
         reply.code = 45
         self.SendReplyPacket(pkt.fd, reply)
 
+    def handle_sign(self, sign, frame):
+        logging.warning("Server Receive SIGN", sign)
+        self.load_ip_static_file()
+
 if __name__ == '__main__':
-    ip_static_config = "ip_static.config"
     if len(sys.argv) > 1:
         ip_static_config = sys.argv[1]
-    relationship_user_ip = dict()
-    if os.path.exists(ip_static_config) is True:
-        with open(ip_static_config, "r") as r:
-            c = r.read()
-            lines = c.split("\n")
-            real_line = filter(lambda x: len(x.strip()) > 0 and x.startswith("#") is False, lines)
-            for line in real_line:
-                records = re.split("\s", line)
-                real_records = filter(lambda x: len(x) > 0, records)
-                if len(real_records) < 2:
-                    continue
-                relationship_user_ip[real_records[0]] = set(real_records[1:])
-    srv = RadiusServer(radius_dict=dictionary.Dictionary("dictionary"), net_segment="172.16.110.0/24",
-                       rs_user_ip=relationship_user_ip)
+    srv = RadiusServer(radius_dict=dictionary.Dictionary("dictionary"), net_segment="172.16.110.0/24")
+    # handle SIGINT 2 from ctrl+c
+    signal.signal(signal.SIGINT, srv.handle_sign)
+    # handle SIGTERM 15 from kill
+    signal.signal(signal.SIGTERM, srv.handle_sign)
+    # handle
+    signal.signal(signal.SIGUSR1, srv.handle_sign)
+    signal.signal(signal.SIGUSR2, srv.handle_sign)
     srv.BindToAddress("0.0.0.0")
     srv.Run()
