@@ -252,7 +252,7 @@ class RadiusServer(server.Server):
         self.SendReplyPacket(pkt.fd, reply)
 
     def handle_sign(self, sign, frame):
-        logging.warning("Server Receive SIGN", sign)
+        logging.warning("Server Receive SIGN %s" % sign)
         self.load_ip_static_file()
 
 if __name__ == '__main__':
