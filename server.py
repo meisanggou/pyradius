@@ -40,6 +40,7 @@ class RadiusServer(server.Server):
         self.clock_stage = dict()
         self.rs_user_ip = dict()
         self.clock_interval = 600
+        self.load_ip_static_file()
 
     def load_ip_static_file(self):
         if self.ip_static_file is None:
